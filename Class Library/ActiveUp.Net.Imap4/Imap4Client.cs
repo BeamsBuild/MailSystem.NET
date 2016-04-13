@@ -299,6 +299,10 @@ namespace ActiveUp.Net.Mail
         /// Event fired when a new message received.
         /// </summary>
         public event ActiveUp.Net.Mail.NewMessageReceivedEventHandler NewMessageReceived;
+        /// <summary>
+        /// Event fired when the IDLE command has been waiting for over 15 minutes.
+        /// </summary>
+        public event EventHandler IdleTimeout;
 
         #endregion
 
@@ -398,6 +402,11 @@ namespace ActiveUp.Net.Mail
         {
             if (NewMessageReceived != null) NewMessageReceived(this, e);
             ActiveUp.Net.Mail.Logger.AddEntry("New message received : " + e.MessageCount + "...", 2);
+        }
+        internal void OnIdleTimeout()
+        {
+            if (IdleTimeout != null) IdleTimeout(this, new EventArgs());
+            ActiveUp.Net.Mail.Logger.AddEntry("Idle timeout", 2);
         }
 
         #endregion
@@ -1020,10 +1029,10 @@ namespace ActiveUp.Net.Mail
                     }
                     catch
                     {
-                        this.Command("DONE", string.Empty);
-                        this.Noop();
-                        this.Command("IDLE");
-                        response = "";
+                        this.Command("LOGOUT", new CommandOptions() { IgnoreResponse = true });
+                        base.Close();
+                        this.OnIdleTimeout();
+                        break;
                     }
                     
                     this.OnTcpRead(new ActiveUp.Net.Mail.TcpReadEventArgs(response));
@@ -1110,80 +1119,103 @@ namespace ActiveUp.Net.Mail
                 this.OnTcpWritten(new ActiveUp.Net.Mail.TcpWrittenEventArgs(stamp + ((stamp.Length > 0) ? " " : "") + command + "\r\n"));
             else
                 this.OnTcpWritten(new ActiveUp.Net.Mail.TcpWrittenEventArgs("long command data"));
-            this.OnTcpReading();
-            System.Text.StringBuilder buffer = new System.Text.StringBuilder();
 
-            var commandAsUpper = command.ToUpper();
-            string partResponse = "";
-            string lastLine = "";
-            string lastLineOfPartResponse = "";
-            using (StreamReader sr = new StreamReader(new MemoryStream())) {
-                while (true) {
-                    if (sr.EndOfStream) {
-                        long streamPos = sr.BaseStream.Position;
-                        receiveResponseData(sr.BaseStream);
-                        sr.BaseStream.Seek(streamPos, SeekOrigin.Begin);
-                    }
-                    partResponse = sr.ReadToEnd();
-                    if (partResponse == null)
-                        partResponse = "";
-                    ActiveUp.Net.Mail.Logger.AddEntry("bordel : " + partResponse);
-                    buffer.Append(partResponse);
+            if (!options.IgnoreResponse)
+            {
 
-                    int pos = partResponse.Trim().LastIndexOf("\r\n");
-                    if (pos > 0)
-                        pos += 2;
-                    else
-                        pos = 0;
-                    lastLineOfPartResponse = partResponse.Substring(pos);
+                this.OnTcpReading();
+                System.Text.StringBuilder buffer = new System.Text.StringBuilder();
 
-                    if (commandAsUpper.StartsWith("LIST") == true) {
-                        if (lastLineOfPartResponse.StartsWith(stamp) || (lastLineOfPartResponse.StartsWith("+ ") && options.IsPlusCmdAllowed)) {
-                            lastLine = lastLineOfPartResponse;
-                            break;
+                var commandAsUpper = command.ToUpper();
+                string partResponse = "";
+                string lastLine = "";
+                string lastLineOfPartResponse = "";
+                using (StreamReader sr = new StreamReader(new MemoryStream()))
+                {
+                    while (true)
+                    {
+                        if (sr.EndOfStream)
+                        {
+                            long streamPos = sr.BaseStream.Position;
+                            receiveResponseData(sr.BaseStream);
+                            sr.BaseStream.Seek(streamPos, SeekOrigin.Begin);
                         }
-                    } else if (commandAsUpper.StartsWith("DONE") == true) {
-                        lastLine = lastLineOfPartResponse;
-                        stamp = lastLine.Split(' ')[0];
-                        break;
-                    } else if (lastLineOfPartResponse != null) {
-                        //Had to remove + check - this was failing when the email contained a line with + 
-                        //Please add comments as to why here, and reimplement differently
-                        if (lastLineOfPartResponse.StartsWith(stamp) || lastLineOfPartResponse.ToLower().StartsWith("* " + command.Split(' ')[0].ToLower()) || (lastLineOfPartResponse.StartsWith("+ ") && options.IsPlusCmdAllowed)) {
-                            lastLine = lastLineOfPartResponse;
-                            break;
-                        } else {
-                            if (buffer.Length > 100)
-                                lastLineOfPartResponse = buffer.ToString().Substring(buffer.Length - 100).Replace("\r\n", "");
-                            else
-                                lastLineOfPartResponse = buffer.ToString().Replace("\r\n", "");
-                            int stampPos = lastLineOfPartResponse.IndexOf(stamp + " OK");
-                            if (stampPos > 0) {
-                                lastLine = lastLineOfPartResponse.Substring(stampPos);
+                        partResponse = sr.ReadToEnd();
+                        if (partResponse == null)
+                            partResponse = "";
+                        ActiveUp.Net.Mail.Logger.AddEntry("bordel : " + partResponse);
+                        buffer.Append(partResponse);
+
+                        int pos = partResponse.Trim().LastIndexOf("\r\n");
+                        if (pos > 0)
+                            pos += 2;
+                        else
+                            pos = 0;
+                        lastLineOfPartResponse = partResponse.Substring(pos);
+
+                        if (commandAsUpper.StartsWith("LIST") == true)
+                        {
+                            if (lastLineOfPartResponse.StartsWith(stamp) || (lastLineOfPartResponse.StartsWith("+ ") && options.IsPlusCmdAllowed))
+                            {
+                                lastLine = lastLineOfPartResponse;
                                 break;
                             }
                         }
+                        else if (commandAsUpper.StartsWith("DONE") == true)
+                        {
+                            lastLine = lastLineOfPartResponse;
+                            stamp = lastLine.Split(' ')[0];
+                            break;
+                        }
+                        else if (lastLineOfPartResponse != null)
+                        {
+                            //Had to remove + check - this was failing when the email contained a line with + 
+                            //Please add comments as to why here, and reimplement differently
+                            if (lastLineOfPartResponse.StartsWith(stamp) || lastLineOfPartResponse.ToLower().StartsWith("* " + command.Split(' ')[0].ToLower()) || (lastLineOfPartResponse.StartsWith("+ ") && options.IsPlusCmdAllowed))
+                            {
+                                lastLine = lastLineOfPartResponse;
+                                break;
+                            }
+                            else
+                            {
+                                if (buffer.Length > 100)
+                                    lastLineOfPartResponse = buffer.ToString().Substring(buffer.Length - 100).Replace("\r\n", "");
+                                else
+                                    lastLineOfPartResponse = buffer.ToString().Replace("\r\n", "");
+                                int stampPos = lastLineOfPartResponse.IndexOf(stamp + " OK");
+                                if (stampPos > 0)
+                                {
+                                    lastLine = lastLineOfPartResponse.Substring(stampPos);
+                                    break;
+                                }
+                            }
+                        }
                     }
+
+                    var bufferString = buffer.ToString();
+                    byte[] bufferBytes = new byte[sr.BaseStream.Length];
+                    sr.BaseStream.Seek(0, SeekOrigin.Begin);
+                    sr.BaseStream.Read(bufferBytes, 0, bufferBytes.Length);
+
+                    if (!sr.CurrentEncoding.Equals(Encoding.UTF8))
+                    {
+                        var utf8Bytes = Encoding.Convert(sr.CurrentEncoding, Encoding.UTF8, sr.CurrentEncoding.GetBytes(bufferString));
+                        bufferString = Encoding.UTF8.GetString(utf8Bytes);
+                    }
+
+                    if (buffer.Length < 200)
+                        this.OnTcpRead(new ActiveUp.Net.Mail.TcpReadEventArgs(bufferString));
+                    else
+                        this.OnTcpRead(new ActiveUp.Net.Mail.TcpReadEventArgs("long data"));
+                    if (lastLine.StartsWith(stamp + " OK") || lastLine.ToLower().StartsWith("* " + command.Split(' ')[0].ToLower()) || lastLine.StartsWith("+ "))
+                        return bufferBytes;
+                    else
+                        throw new ActiveUp.Net.Mail.Imap4Exception("Command \"" + command + "\" failed", bufferBytes);
                 }
-
-                var bufferString = buffer.ToString();
-                byte[] bufferBytes = new byte[sr.BaseStream.Length];
-                sr.BaseStream.Seek(0, SeekOrigin.Begin);
-                sr.BaseStream.Read(bufferBytes, 0, bufferBytes.Length);
-
-                if (!sr.CurrentEncoding.Equals(Encoding.UTF8)) {
-                    var utf8Bytes = Encoding.Convert(sr.CurrentEncoding, Encoding.UTF8, sr.CurrentEncoding.GetBytes(bufferString));
-                    bufferString = Encoding.UTF8.GetString(utf8Bytes);
-                }
-
-                if (buffer.Length < 200)
-                    this.OnTcpRead(new ActiveUp.Net.Mail.TcpReadEventArgs(bufferString));
-                else
-                    this.OnTcpRead(new ActiveUp.Net.Mail.TcpReadEventArgs("long data"));
-                if (lastLine.StartsWith(stamp + " OK") || lastLine.ToLower().StartsWith("* " + command.Split(' ')[0].ToLower()) || lastLine.StartsWith("+ "))
-                    return bufferBytes;
-                else
-                    throw new ActiveUp.Net.Mail.Imap4Exception("Command \"" + command + "\" failed", bufferBytes);
+            }
+            else
+            {
+                return new byte[] { };
             }
         }
 
