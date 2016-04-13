@@ -858,7 +858,7 @@ namespace ActiveUp.Net.Mail
         /// </example>
         public string Disconnect()
         {
-            string greeting = this.Command("logout");
+            string greeting = this.Command("logout", new CommandOptions() { IgnoreResponse = true });
             base.Close();
             return greeting;
         }
