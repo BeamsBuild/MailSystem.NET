@@ -1029,9 +1029,12 @@ namespace ActiveUp.Net.Mail
                     }
                     catch
                     {
-                        this.Command("LOGOUT", new CommandOptions() { IgnoreResponse = true });
-                        base.Close();
-                        this.OnIdleTimeout();
+                        if (base.Connected)
+                        {
+                            this.Command("LOGOUT", new CommandOptions() { IgnoreResponse = true });
+                            base.Close();
+                            this.OnIdleTimeout();
+                        }
                         break;
                     }
                     
